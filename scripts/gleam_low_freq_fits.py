@@ -353,3 +353,79 @@ def low_freq_multifit(catalog_loc):
         # source_dict is a dict of dicts
         source_dict[source] = source_vars
     return(source_dict)
+
+
+def spectral_ind_dist(source_dict, plot_type='diff', flux_threshold=1, save_loc=None):
+    """
+    Creates a 2D histogram of source brightness at 150 MHz vs spectral index
+
+    Parameters
+    ----------
+    source_dict : dict
+        The output from 'low_freq_fit', a dict of data and parameters describing the fits of sources
+    plot_type : str
+        Which fit iteration spectral index to plot. Must be one of:
+        - "diff" (Difference between initial and final fit spectral indices)
+        - "first" (Spectral index of initial, all-frequency fits)
+        - "final" (Spectral index of final, best fits)
+    flux_threshold : float
+        Flux threshold used in 'low_freq_fit'. Should be identical to that threshold. Default is 1Jy.
+    save_loc : str
+        Path of folder to save plots in.
+
+    Outputs
+    -------
+    Plot of brightness distribution on x axis and spectral index (or difference between spectral indices)
+    on y axis.
+
+    If plot_type = "diff", there will be no sources below the flux threshold specified in 'low_freq_fit',
+    because only 1 fit is done at sources dimmer than that threshold.
+
+    If "save_loc" is specified, the plot will be saved in that location as:
+    "path.../flux150_vs_spectral_index_hist_[plot_type].png"
+
+    """
+    midband = []
+    diff = []
+    first = []
+    last = []
+
+    for i in source_dict:
+        if i in source_dict:
+            if plot_type == 'diff':
+
+                # Ignore sources with only one fit
+                if np.isnan(source_dict[i]['prev_fit_data'][1][0]):
+                    continue
+                else:
+                    midband.append(source_dict[i]['prev_fit_data'][0][9])
+                    first_ind = source_dict[i]['prev_fit_data'][9][1]
+                    last_ind = source_dict[i]['coefficients'][1]
+                    diff.append(last_ind - first_ind)
+            elif plot_type == 'first':
+                midband.append(source_dict[i]['prev_fit_data'][0][9])
+                first.append(source_dict[i]['prev_fit_data'][9][1])
+            elif plot_type == 'last':
+                midband.append(source_dict[i]['prev_fit_data'][0][9])
+                last.append(source_dict[i]['coefficients'][1])
+
+    if plot_type == 'diff':
+        plt.hist2d(midband, diff, bins=100, norm=LogNorm(), range=[[0, 5], [-16, 16]])
+        plt.ylabel("Spectral index diff, [last - first]")
+        plt.title("Distribution of source flux vs spectral index, [final - first] fit, multifit threshold: " + str(flux_threshold) + " Jy")
+
+    elif plot_type == 'first':
+        plt.hist2d(midband, first, bins=100, norm=LogNorm(), range=[[0, 5], [-10, 10]])
+        plt.ylabel("Spectral index, first fit")
+        plt.title("Distribution of source flux vs spectral index, " + plot_type + " fit, multifit threshold: " + str(flux_threshold) + " Jy")
+
+    elif plot_type == 'final':
+        plt.hist2d(midband, last, bins=100, norm=LogNorm(), range=[[0, 5], [-10, 10]])
+        plt.ylabel("Spectral index, final fit")
+        plt.title("Distribution of source flux vs spectral index, " + plot_type + " fit, multifit threshold: " + str(flux_threshold) + " Jy")
+
+    plt.xlabel("150 Mhz flux")
+
+    if save_loc is not None:
+        filepath = save_loc + "flux150_vs_spectral_index_hist_" + plot_type + "_" + str(flux_threshold) + "jy.png"
+        plt.savefig(filepath)
