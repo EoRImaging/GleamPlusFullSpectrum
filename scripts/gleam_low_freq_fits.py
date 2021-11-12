@@ -13,11 +13,7 @@ import csv
 from matplotlib.colors import LogNorm
 sm = SkyModel()
 
-gleam_catalog = sm.from_gleam_catalog("/Users/Kiana1/uwradcos/gleam.vot", spectral_type = "subband", with_error = True)
-gleam_spectral_index = sm.from_gleam_catalog("/Users/Kiana1/uwradcos/gleam.vot", spectral_type = "spectral_index", with_error = True)
-
-
-def log_linear_fit(freqs, fit_data, stokes_error, dec, detect_outlier = False):
+def log_linear_fit(freqs, fit_data, stokes_error, dec, gleam_catalog, detect_outlier = False):
     """
     This is the fit modeling function. It compute combined error, fits the log of source data to a linear
     polynomial, and calculates a chi2 residual. It can also perform an outlier analysis, to see if any
@@ -73,19 +69,12 @@ def log_linear_fit(freqs, fit_data, stokes_error, dec, detect_outlier = False):
 
     # Compute total error and weight for the polyfit
     total_error = np.sqrt(loc_error**2 + stokes_error**2)
+    weight = np.log10(1 / total_error)
 
-    with warnings.catch_warnings():
-
-        # Ignore warnings caused by some sources having 1 or 0 data points
-        warnings.filterwarnings(action = "ignore", message="Degrees of freedom <= 0 for slice.")
-        warnings.filterwarnings(action = "ignore", message="divide by zero encountered in log10")
-
-        weight = np.log10(1 / total_error)
-
-        # Convert data into log scale for polyfit
-        fit_data_log = np.log10(fit_data)
-        freqs_log = np.log10(freqs)
-        all_freqs_log = np.log10(gleam_catalog.freq_array.value)
+    # Convert data into log scale for polyfit
+    fit_data_log = np.log10(fit_data)
+    freqs_log = np.log10(freqs)
+    all_freqs_log = np.log10(gleam_catalog.freq_array.value)
 
     # Subset to freqs with no nans in vals or errors and do polyfit on only those freqs
     idx = np.isfinite(freqs_log) & np.isfinite(fit_data_log) & np.isfinite(weight)
@@ -235,36 +224,28 @@ def low_freq_multifit(catalog_loc):
 
     """
 
-    #Import gleam source catalog
-    gleam_catalog = sm.from_gleam_catalog(catalog_loc, spectral_type = "subband", with_error = True)
+    # Import gleam source catalog
+    gleam_catalog = sm.from_gleam_catalog(catalog_loc, spectral_type="subband", with_error=True)
 
-    #Initialize arrays
+    # Initialize arrays
     source_dict = {}
     bad_chi2 = []
     fit_averages = []
     problem_objs = []
 
-
     # Separate all rows that contain nans
     for source in np.arange(gleam_catalog.Ncomponents):
-        fit_data = gleam_catalog.stokes.value[0,:,source]
+        fit_data = gleam_catalog.stokes.value[0, :, source]
         dec = gleam_catalog.dec.value[source]
         freqs = gleam_catalog.freq_array.value
-        stokes_error = gleam_catalog.stokes_error.value[0,:,source]
+        stokes_error = gleam_catalog.stokes_error.value[0, :, source]
 
-        # Calculate variance between fluxes for final dict
-        with warnings.catch_warnings():
+        mean_adj_data = (fit_data - np.nanmean(fit_data)) / np.nanmean(fit_data)
 
-            # Ignore warnings caused by some sources having 1 or 0 data points
-            warnings.filterwarnings(action = "ignore", message="divide by zero encountered in log10")
-            warnings.filterwarnings(action = "ignore", message="Degrees of freedom <= 0 for slice.")
-            warnings.filterwarnings(action = "ignore", message="Mean of empty slice")
-            mean_adj_data = (fit_data - np.nanmean(fit_data)) / np.nanmean(fit_data)
+        diff = np.diff(mean_adj_data)
+        variance = np.nanvar(diff)
 
-            diff = np.diff(mean_adj_data)
-            variance = np.nanvar(diff)
-
-        #Initialize arrays for half and quarter fits
+        # Initialize arrays for half and quarter fits
         out2 = np.array([[float("NaN")], [float("NaN")], [float("NaN")], [float("NaN")]])
         out3 = np.array([[float("NaN")], [float("NaN")], [float("NaN")], [float("NaN")]])
 
@@ -292,14 +273,14 @@ def low_freq_multifit(catalog_loc):
             continue
 
         # Perform full fit using all freqs available for source
-        out1 = log_linear_fit(freqs, fit_data, stokes_error, dec, detect_outlier = True)
+        out1 = log_linear_fit(freqs, fit_data, stokes_error, dec, gleam_catalog, detect_outlier=True)
 
-        #Transfer output to 'out', which is the final output variable, to save results from this fit in out1
+        # Transfer output to 'out', which is the final output variable, to save results from this fit in out1
         out = out1
 
         # if chi2_residual is >=1.93 and brighter than 1Jy at 150MHz, fit again with fewer freqs
         if out[1] >= 1.93:
-            if fit_data[9]>=1:
+            if fit_data[9] >= 1:
 
                 # Fit with bottom half of freqs
                 if len(fit_data[indices]) >= 8:
@@ -308,7 +289,7 @@ def low_freq_multifit(catalog_loc):
                     error_half = stokes_error[indices[:int(len(indices) / 2)]]
 
                     # Fit with bottom half of freqs
-                    out2 = log_linear_fit(half_freqs, fit_data_half, error_half, dec)
+                    out2 = log_linear_fit(half_freqs, fit_data_half, error_half, dec, gleam_catalog)
                     out = out2
 
                     # if 2nd fit has poor chi2, fit with bottom 1/4 freqs
@@ -319,7 +300,7 @@ def low_freq_multifit(catalog_loc):
                             fit_data_qt = fit_data_half[:int(len(half_freqs) / 2)]
                             error_qt = error_half[:int(len(half_freqs) / 2)]
 
-                            out3 = log_linear_fit(qt_freqs, fit_data_qt, error_qt, dec)
+                            out3 = log_linear_fit(qt_freqs, fit_data_qt, error_qt, dec, gleam_catalog)
                             out = out3
 
                         # If there are <16 total non-nan frequencies, fit on bottom 4
@@ -328,7 +309,7 @@ def low_freq_multifit(catalog_loc):
                             fit_data_bottom = fit_data[indices[:4]]
                             error_bottom = stokes_error[indices[:4]]
 
-                            out3 = log_linear_fit(bottom_freqs, fit_data_bottom, error_bottom, dec)
+                            out3 = log_linear_fit(bottom_freqs, fit_data_bottom, error_bottom, dec, gleam_catalog)
                             out = out3
 
                 else:
@@ -338,7 +319,7 @@ def low_freq_multifit(catalog_loc):
                     error_bottom = stokes_error[indices[:4]]
 
                     # Fit with bottom half of freqs
-                    out2 = log_linear_fit(bottom_freqs, fit_data_bottom, error_bottom, dec)
+                    out2 = log_linear_fit(bottom_freqs, fit_data_bottom, error_bottom, dec, gleam_catalog)
                     out = out2
 
         # if chi2_residual is still large after all iterations, take lowest one
@@ -372,5 +353,3 @@ def low_freq_multifit(catalog_loc):
         # source_dict is a dict of dicts
         source_dict[source] = source_vars
     return(source_dict)
-
-d
