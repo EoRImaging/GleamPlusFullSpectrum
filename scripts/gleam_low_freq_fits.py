@@ -152,6 +152,33 @@ def log_linear_fit(freqs, fit_data, stokes_error, dec, catalog, detect_outlier=F
     return(coeffs, chi2_residual, fitted_data, all_freqs_fitted_data, fitted_freqs, fit_data_selected, original_parameters, low_fit)
 
 
+def chi2_one_percent(list_of_freqs):
+    """
+    Checks how many frequencies are present and selects the appropriate chi2 value corresponding
+    to a p=.01 value. The chi2 values correspond to the degrees of freedom, which is:
+    total number of frequencies - number of fitting coefficients
+    For gleam, there are 2 fitting coefficients.
+
+    Parameters
+    ----------
+    list_of_freqs : list
+        The frequencies to be checked against a chi2.
+
+    Returns
+    -------
+    chi2_val : float
+        The chi2 value that corresponds to the number of frequencies.
+    """
+    # Reduced chi2 values corresponding to the number of frequencies.
+    chi2_dict = {20: 1.934, 19: 1.965, 18: 2.0, 17: 2.039, 16: 2.082, 15: 2.130, 14: 2.185, 13: 248, 12: 2.321,
+                 11: 2.407, 10: 2.511, 9: 2.639, 8: 2.802, 7: 3.017, 6: 3.319, 5: 3.780, 4: 4.605, 3: 6.635}
+
+    tot_freqs = len(list_of_freqs)
+    chi2_val = chi2_dict[tot_freqs]
+
+    return(chi2_val)
+
+
 def low_freq_fit(catalog_loc, flux_threshold=1, sources_list=None, save_csv=None):
     """
     This function performs a multi-layered fit of the GLEAM catalog sources with a preference for low frequencies.
@@ -159,13 +186,18 @@ def low_freq_fit(catalog_loc, flux_threshold=1, sources_list=None, save_csv=None
     For a given source;
         1. Replace any negative fluxes with NaN's
         2. Run 'log_linear_fit' function on source data, checking for significant outliers.
-        3. If the source is >1 Jy at 150 MHz, and if the reduced chi2 of the fit is >= 1.93, run 'log_linear_fit'
-        again, on only the bottom half of available frequencies for the source. Sources dimmer than 1 Jy do not
-        show much fit improvement by reducing the number of frequencies, because their scatter is high.
-        4. If the reduced chi2 of the fit of the bottom half of frequencies is still >= 1.93, AND there are at
-        least 8 frequencies in the bottom half of frequencies, run 'log_linear_fit' a third time on only the
-        bottom quarter of frequencies for the source.
-        5. If the reduced chi2 is still >= 1.93, the fit with the lowest chi2 is selected as the best fit.
+        3. If the source is >1 Jy at 150 MHz, and if the reduced chi2 of the fit is >= the corresponding chi2
+        threshold based on number of frequencies, run 'log_linear_fit' again, on only the bottom half of available
+        frequencies for the source. Sources dimmer than 1 Jy do not show much fit improvement by reducing the
+        number of frequencies, because their scatter is high.
+        4. If the reduced chi2 of the fit of the bottom half of frequencies is still >= the corresponding total-frequencies
+        dependent chi2 value, AND there are at least 8 frequencies in the bottom half of frequencies, run
+        'log_linear_fit' a third time on only the bottom quarter of frequencies for the source.
+        5. If the reduced chi2 is still >= the chi2 threshold, the fit with the lowest chi2 is selected as the best fit.
+        This does slightly bias in favor of larger numbers of frequencies since the 1% chi2 threshold is higher for
+        more degrees of freedom.
+         in variable:
+            pass
         6. Parameters and data for the best/final fit are put into a dict, which also includes a keyword whose
         value is the relevant parameters of any previous fits.
 
@@ -309,7 +341,7 @@ def low_freq_fit(catalog_loc, flux_threshold=1, sources_list=None, save_csv=None
         out = out1
 
         # if chi2_residual is >=1.93 and brighter than 1Jy at 150MHz, fit again with fewer freqs
-        if out[1] >= 1.93:
+        if out[1] >= chi2_one_percent(out[4]):
             if fit_data[9] >= flux_threshold:
 
                 # Fit with bottom half of freqs
@@ -322,7 +354,7 @@ def low_freq_fit(catalog_loc, flux_threshold=1, sources_list=None, save_csv=None
                     out = out2
 
                     # if half fit has poor chi2, fit with bottom 1/4 freqs
-                    if out[1] >= 1.93:
+                    if out[1] >= chi2_one_percent(out[4]):
 
                         # If there are >=16 total non-nan frequencies, fit on bottom 1/4
                         if len(half_freqs) >= 8:
@@ -352,7 +384,7 @@ def low_freq_fit(catalog_loc, flux_threshold=1, sources_list=None, save_csv=None
                     out = out2
 
         # if chi2_residual is still >=1.93 after all iterations, keep fit with lowest chi2 as the best fit
-        if out[1] >= 1.93:
+        if out[1] >= chi2_one_percent(out[4]):
             bad_chi2.append([source, out1[3], out2[3], out3[3], out1[1], out2[1], out3[1]])
 
             # select best of 3 fit options by chi2 val and use as final fit
@@ -531,13 +563,14 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
     source_dict : dict
         The first object returned from the 'low_freq_fit' function
     plot_type :  str
-        One of the following: 'no_dim', 'bright', 'spect_ind_outliers', 'multi', 'hera_stripe', 'all'.
+        One of the following: 'no_dim', 'bright', 'spect_ind_outliers', 'multi', 'hera_stripe', 'removed_outliers', 'all'.
         1. 'no_dim' - sources above 100 mJ
         2. 'bright' - sources where the all frequency fit is brighter than 1 Jy at 150 MHz
         3. 'spect_ind_outliers' - sources with spectral indices outside of [-2, 1]
         4. 'multi' - sources that were fitted multiple times
         5. 'hera_stripe' - sources that fall in the HERA stripe
-        6. 'all' - all sources
+        6. 'removed_outlier' - sources that had an outlier identified and removed
+        7. 'all' - all sources
     order : str
         One of the following: 'low_freq_compare', 'max_flux', '150mhz_flux', 'chi2', 'spect_ind'.
         1. 'low_freq_compare' - sorts based on difference between fit extrapolation at 50 MHz of first fit and
@@ -546,10 +579,12 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
         3. '150mhz_flux' - sorts based on brightness of the initial all-frequency fit at 150 MHz, brightest to dimmest
         4. 'chi2' - based on chi2 value, largest to smallest
         5. 'spect_ind' - sorts based on the absolute value of the final spectral index of the source, largest to smallest.
-    Nsources : int
+    Nsources : int or str
+        An integer, or 'all'.
         Number of catalog sources to plot. If less than the total number of sources that fulfill the plot_type is
         given, plots the specified number of plots sorted by the order. For example if Nsources=30 and order=chi2,
         it will plot the 30 largest chi2 sources from large to small.
+        If 'all', all plots fulfilling the criteria of the argument 'plot_type' will be plotted.
     savefig : bool
         If True, will save all figures in the folder given by 'saveloc'. Many files are generated, so it's good to
         specify a folder separate from anything else.
@@ -640,6 +675,14 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
                     ordered_power.append([sort_var, k])
                     tag = "with Spectral Index outside of [-2,1]"
 
+            elif plot_type == 'removed_outlier':
+                # Skip objects that don't have outlier info
+                if np.isnan(source_dict[source_num]['pre_outlier_removal_output'][0][0]):
+                    continue
+                else:
+                    ordered_power.append([sort_var, k])
+                    tag = "with a significant outlier point"
+
             elif plot_type == 'all':
                 ordered_power.append([sort_var, k])
 
@@ -726,12 +769,13 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
                 # Data of outlier point
                 outlier_freq = np.setdiff1d(list(pre_outlier_freqs), list(post_outlier_freqs))
                 outlier_flux = gleam_catalog.stokes.value[0, gleam_catalog.freq_array.value == outlier_freq * 1000000, source_num]
+                outlier_error = gleam_catalog.stokes_error.value[0, gleam_catalog.freq_array.value == outlier_freq * 1000000, source_num]
 
                 # Plots pre-outlier removal fits if an outlier was removed, and plots outlier point
                 plots.append('fit.plot(freqs, full_fit_pre_outlier, linestyle = "--", label = "full fit pre-outlier removal", color = "#002940")')
-                plots.append('fit.scatter(outlier_freq, outlier_flux, label = "outlier", color = "#9A00FF")')
+                plots.append('fit.errorbar(outlier_freq, outlier_flux, yerr = outlier_error, label = "outlier", color = "#9A00FF, zorder=10")')
 
-                if 'Line2D([0], [0], color = "#002940", linestyle = "--" label = "pre-outlier removal")' not in elements:
+                if 'Line2D([0], [0], color = "#002940", linestyle = "--", label = "pre-outlier removal")' not in elements:
                     elements.append('Line2D([0], [0], color = "#002940", linestyle = "--", label = "pre-outlier removal")')
                 if 'Line2D([0], [0], marker = "o", markersize = 13, color = "#9A00FF", label = "outlier")' not in elements:
                     elements.append('Line2D([0], [0], marker = "o", markersize = 13, color = "#9A00FF", label = "outlier")')
@@ -743,7 +787,7 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
             textstr_var = '\n'.join((textstr_var))
 
             # If the only fit is first all-freq fit, and it is below the chi2 threshhold of 1.93, color plot red
-            if source_dict[source_num]['prev_fit_data'][3] >= 1.93 and np.isnan(np.all(source_dict[source_num]['prev_fit_data'][1])):
+            if source_dict[source_num]['prev_fit_data'][3] >= chi2_one_percent(source_dict[source_num]['freqs_used_for_fit']) and np.isnan(np.all(source_dict[source_num]['prev_fit_data'][1])):
                 plots.append('fit.spines["left"].set_color("red")')
                 plots.append('fit.tick_params(axis="y", colors="red")')
                 plots.append('resid.spines["bottom"].set_color("red")')
@@ -772,7 +816,7 @@ def plotFits(catalog_loc, source_dict, plot_type, order, Nsources=9, savefig=Fal
                     quarter_fit = source_dict[source_num]['prev_fit_data'][2]
 
                     # if no good fit is found change axes color to red
-                    if source_dict[source_num]['prev_fit_data'][5] >= 1.93:
+                    if source_dict[source_num]['prev_fit_data'][5] >= chi2_one_percent(source_dict[source_num]['freqs_used_for_fit']):
                         plots.append('fit.spines["left"].set_color("red")')
                         plots.append('fit.tick_params(axis="y", colors="red")')
                         plots.append('resid.spines["bottom"].set_color("red")')
